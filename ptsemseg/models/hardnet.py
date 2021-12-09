@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import collections
-from CatConv2d.catconv2d import CatConv2d
 
 class ConvLayer(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel=3, stride=1, dropout=0.1):
@@ -27,84 +26,6 @@ class BRLayer(nn.Sequential):
         self.add_module('relu', nn.ReLU(True))
     def forward(self, x):
         return super().forward(x)
-
-
-class HarDBlock_v2(nn.Module):
-    def get_link(self, layer, base_ch, growth_rate, grmul):
-        if layer == 0:
-          return base_ch, 0, []
-        out_channels = growth_rate
-        link = []
-        for i in range(10):
-          dv = 2 ** i
-          if layer % dv == 0:
-            k = layer - dv
-            link.append(k)
-            if i > 0:
-                out_channels *= grmul
-        out_channels = int(int(out_channels + 1) / 2) * 2
-        in_channels = 0
-        for i in link:
-          ch,_,_ = self.get_link(i, base_ch, growth_rate, grmul)
-          in_channels += ch
-        return out_channels, in_channels, link
-
-
-    def get_out_ch(self):
-        return self.out_channels
-
-    def __init__(self, in_channels, growth_rate, grmul, n_layers, keepBase=False, residual_out=False, dwconv=False, list_out=False):
-        super().__init__()
-        self.in_channels = in_channels
-        self.growth_rate = growth_rate
-        self.grmul = grmul
-        self.n_layers = n_layers
-        self.keepBase = keepBase
-        self.links = []
-        self.list_out = list_out
-        layers_ = []
-        self.out_channels = 0
-
-        for i in range(n_layers):
-          outch, inch, link = self.get_link(i+1, in_channels, growth_rate, grmul)
-          self.links.append(link)
-          use_relu = residual_out
-          layers_.append(CatConv2d(inch, outch, (3,3), relu=True))
-
-          if (i % 2 == 0) or (i == n_layers - 1):
-            self.out_channels += outch
-        print("Blk out =",self.out_channels)
-        self.layers = nn.ModuleList(layers_)
-
-    def transform(self, blk):
-        for i in range(len(self.layers)):
-            self.layers[i].weight[:,:,:,:] = blk.layers[i][0].weight[:,:,:,:]
-            self.layers[i].bias[:] = blk.layers[i][0].bias[:]
-
-    def forward(self, x):
-        layers_ = [x]
-        #self.res = []
-        for layer in range(len(self.layers)):
-            link = self.links[layer]
-            tin = []
-            for i in link:
-                tin.append(layers_[i])
-
-            out = self.layers[layer](tin)
-            #self.res.append(out)
-            layers_.append(out)
-        t = len(layers_)
-        out_ = []
-        for i in range(t):
-          if (i == 0 and self.keepBase) or \
-             (i == t-1) or (i%2 == 1):
-              out_.append(layers_[i])
-        if self.list_out:
-            return out_
-        else:
-            return torch.cat(out_, 1)
-
-
 
 class HarDBlock(nn.Module):
     def get_link(self, layer, base_ch, growth_rate, grmul):
@@ -266,33 +187,6 @@ class hardnet(nn.Module):
         self.finalConv = nn.Conv2d(in_channels=cur_channels_count,
                out_channels=n_classes, kernel_size=1, stride=1,
                padding=0, bias=True)
-    
-    def v2_transform(self):        
-        for i in range( len(self.base)):
-            if isinstance(self.base[i], HarDBlock):
-                blk = self.base[i]
-                self.base[i] = HarDBlock_v2(blk.in_channels, blk.growth_rate, blk.grmul, blk.n_layers, list_out=True)
-                self.base[i].transform(blk)
-            elif isinstance(self.base[i], nn.Sequential):
-                blk = self.base[i]
-                sz = blk[0].weight.shape
-                if sz[2] == 1:
-                    self.base[i] = CatConv2d(sz[1],sz[0],(1,1), relu=True)
-                    self.base[i].weight[:,:,:,:] = blk[0].weight[:,:,:,:]
-                    self.base[i].bias[:] = blk[0].bias[:]
-
-        for i in range(self.n_blocks):
-            blk = self.denseBlocksUp[i]
-            self.denseBlocksUp[i] = HarDBlock_v2(blk.in_channels, blk.growth_rate, blk.grmul, blk.n_layers, list_out=False)
-            self.denseBlocksUp[i].transform(blk)
-  
-        for i in range(len(self.conv1x1_up)):
-            blk = self.conv1x1_up[i]
-            sz = blk[0].weight.shape
-            if sz[2] == 1:
-                self.conv1x1_up[i] = CatConv2d(sz[1],sz[0],(1,1), relu=True)
-                self.conv1x1_up[i].weight[:,:,:,:] = blk[0].weight[:,:,:,:]
-                self.conv1x1_up[i].bias[:] = blk[0].bias[:]                 
 
     def forward(self, x):
         
